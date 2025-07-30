@@ -1,73 +1,63 @@
-
-// Importamos las funcionalidades necesarias de Anchor
 use anchor_lang::prelude::*;
 
-// Definimos el módulo principal del programa
+declare_id!("LegionHulk111111111111111111111111111111111"); // Cambia esto al programId real cuando despliegues
+
+const MAX_SUPPLY: u64 = 10_000_000_000 * 10u64.pow(9); // 10 billones con 9 decimales
+const INITIAL_SUPPLY: u64 = 5_000_000_000 * 10u64.pow(9); // 5 billones iniciales
+
 #[program]
-pub mod contrato_meme {
+pub mod legion_hulk {
     use super::*;
 
-    // Función para inicializar el token
+    // Inicializar el token con supply inicial
     pub fn initialize(ctx: Context<Initialize>) -> Result<()> {
         let meme_data = &mut ctx.accounts.meme_data;
-        
-        // Establecemos el nombre del token
-        meme_data.name = "Codeinu".to_string();
-        
-        // Establecemos el símbolo del token
-        meme_data.symbol = "$CINU".to_string();
-        
-        // Establecemos el número de decimales (9 es común en Solana)
+
+        meme_data.name = "Legion Hulk".to_string();
+        meme_data.symbol = "LGHK".to_string();
         meme_data.decimals = 9;
-        
-        // Establecemos el suministro total (100 mil millones con 9 decimales)
-        meme_data.total_supply = 100_000_000_000 * 10u64.pow(9);
-        
-        // Establecemos la autoridad del token
+        meme_data.total_supply = INITIAL_SUPPLY;
         meme_data.authority = ctx.accounts.authority.key();
-        
+
+        // Crear cuenta de token del creador con el supply inicial
+        let creator_account = &mut ctx.accounts.creator_account;
+        creator_account.owner = ctx.accounts.authority.key();
+        creator_account.balance = INITIAL_SUPPLY;
+
         Ok(())
     }
 
-    // Función para acuñar nuevos tokens
+    // Acuñar nuevos tokens (hasta el máximo)
     pub fn mint(ctx: Context<Mint>, amount: u64) -> Result<()> {
         let meme_data = &mut ctx.accounts.meme_data;
         let recipient = &mut ctx.accounts.recipient;
 
-        // Verificamos que solo la autoridad pueda acuñar tokens
         if *ctx.accounts.authority.key != meme_data.authority {
             return Err(ErrorCode::Unauthorized.into());
         }
 
-        // Verificamos que no se exceda el suministro total
-        if meme_data.total_supply + amount > 100_000_000_000 * 10u64.pow(meme_data.decimals as u32) {
+        if meme_data.total_supply + amount > MAX_SUPPLY {
             return Err(ErrorCode::ExceedsSupply.into());
         }
 
-        // Actualizamos el saldo del destinatario
         recipient.balance = recipient.balance.checked_add(amount).unwrap();
-
-        // Actualizamos el suministro total
         meme_data.total_supply = meme_data.total_supply.checked_add(amount).unwrap();
 
         Ok(())
     }
 
-    // Función para transferir tokens entre cuentas
+    // Transferencia simple
     pub fn transfer(ctx: Context<Transfer>, amount: u64) -> Result<()> {
         let from = &mut ctx.accounts.from;
         let to = &mut ctx.accounts.to;
 
-        // Verificamos que el remitente tenga suficientes fondos
         if from.balance < amount {
             return Err(ErrorCode::InsufficientFunds.into());
         }
 
-        // Realizamos la transferencia
         from.balance = from.balance.checked_sub(amount).unwrap();
         to.balance = to.balance.checked_add(amount).unwrap();
 
-        // Emitimos un evento de transferencia
         emit!(TransferEvent {
             from: *from.to_account_info().key,
             to: *to.to_account_info().key,
@@ -77,21 +67,18 @@ pub mod contrato_meme {
         Ok(())
     }
 
-    // Nueva función para quemar tokens
+    // Quemar tokens
     pub fn burn(ctx: Context<Burn>, amount: u64) -> Result<()> {
         let meme_data = &mut ctx.accounts.meme_data;
         let from = &mut ctx.accounts.from;
 
-        // Verificamos que la cuenta tenga suficientes fondos
         if from.balance < amount {
             return Err(ErrorCode::InsufficientFunds.into());
         }
 
-        // Quemamos los tokens
         from.balance = from.balance.checked_sub(amount).unwrap();
         meme_data.total_supply = meme_data.total_supply.checked_sub(amount).unwrap();
 
-        // Emitimos un evento de quemado
         emit!(BurnEvent {
             from: *from.to_account_info().key,
             amount,
@@ -100,19 +87,16 @@ pub mod contrato_meme {
         Ok(())
     }
 
-    // Nueva función para cambiar la autoridad del token
+    // Cambiar autoridad
     pub fn change_authority(ctx: Context<ChangeAuthority>, new_authority: Pubkey) -> Result<()> {
         let meme_data = &mut ctx.accounts.meme_data;
 
-        // Verificamos que solo la autoridad actual pueda cambiar la autoridad
         if *ctx.accounts.authority.key != meme_data.authority {
             return Err(ErrorCode::Unauthorized.into());
         }
 
-        // Cambiamos la autoridad
         meme_data.authority = new_authority;
 
-        // Emitimos un evento de cambio de autoridad
         emit!(ChangeAuthorityEvent {
             old_authority: *ctx.accounts.authority.key,
             new_authority,
@@ -121,23 +105,20 @@ pub mod contrato_meme {
         Ok(())
     }
 
-    // Función para hacer stake de tokens
+    // Staking
     pub fn stake(ctx: Context<Stake>, amount: u64) -> Result<()> {
         let token_account = &mut ctx.accounts.token_account;
         let stake_account = &mut ctx.accounts.stake_account;
         let clock = Clock::get()?;
 
-        // Verificar que el usuario tenga suficientes tokens
         if token_account.balance < amount {
             return Err(ErrorCode::InsufficientFunds.into());
         }
 
-        // Transferir tokens de la cuenta de token a la cuenta de stake
         token_account.balance = token_account.balance.checked_sub(amount).unwrap();
         stake_account.amount = stake_account.amount.checked_add(amount).unwrap();
         stake_account.start_time = clock.unix_timestamp;
 
-        // Emitir evento de stake
         emit!(StakeEvent {
             user: *ctx.accounts.user.key,
             amount,
@@ -146,31 +127,28 @@ pub mod contrato_meme {
         Ok(())
     }
 
-    // Función para retirar tokens del stake
+    // Unstake + recompensa 1% diario
     pub fn unstake(ctx: Context<Unstake>) -> Result<()> {
         let token_account = &mut ctx.accounts.token_account;
         let stake_account = &mut ctx.accounts.stake_account;
         let clock = Clock::get()?;
 
-        // Calcular la recompensa (por ejemplo, 1% por día)
-        let days_staked = (clock.unix_timestamp - stake_account.start_time) / 86400; // 86400 segundos en un día
+        let days_staked = (clock.unix_timestamp - stake_account.start_time) / 86400;
         let reward = (stake_account.amount as u128 * days_staked as u128 * 1) / 100;
 
-        // Transferir tokens y recompensa de vuelta a la cuenta de token
-        token_account.balance = token_account.balance
+        token_account.balance = token_account
+            .balance
             .checked_add(stake_account.amount)
             .unwrap()
             .checked_add(reward as u64)
             .unwrap();
 
-        // Emitir evento de unstake
         emit!(UnstakeEvent {
             user: *ctx.accounts.user.key,
             amount: stake_account.amount,
             reward: reward as u64,
         });
 
-        // Reiniciar la cuenta de stake
         stake_account.amount = 0;
         stake_account.start_time = 0;
 
@@ -178,17 +156,18 @@ pub mod contrato_meme {
     }
 }
 
-// Estructura para la inicialización del token
+// --- Accounts ---
 #[derive(Accounts)]
 pub struct Initialize<'info> {
     #[account(init, payer = authority, space = 8 + 32 + 32 + 1 + 8 + 32)]
     pub meme_data: Account<'info, MemeData>,
+    #[account(init, payer = authority, space = 8 + 32 + 8)]
+    pub creator_account: Account<'info, TokenAccount>,
     #[account(mut)]
     pub authority: Signer<'info>,
     pub system_program: Program<'info, System>,
 }
 
-// Estructura para la acuñación de tokens
 #[derive(Accounts)]
 pub struct Mint<'info> {
     #[account(mut)]
@@ -198,7 +177,6 @@ pub struct Mint<'info> {
     pub authority: Signer<'info>,
 }
 
-// Estructura para la transferencia de tokens
 #[derive(Accounts)]
 pub struct Transfer<'info> {
     #[account(mut)]
@@ -208,7 +186,6 @@ pub struct Transfer<'info> {
     pub authority: Signer<'info>,
 }
 
-// Nueva estructura para quemar tokens
 #[derive(Accounts)]
 pub struct Burn<'info> {
     #[account(mut)]
@@ -218,7 +195,6 @@ pub struct Burn<'info> {
     pub authority: Signer<'info>,
 }
 
-// Nueva estructura para cambiar la autoridad
 #[derive(Accounts)]
 pub struct ChangeAuthority<'info> {
     #[account(mut)]
@@ -226,7 +202,6 @@ pub struct ChangeAuthority<'info> {
     pub authority: Signer<'info>,
 }
 
-// Estructura para el stake de tokens
 #[derive(Accounts)]
 pub struct Stake<'info> {
     #[account(mut)]
@@ -244,7 +219,6 @@ pub struct Stake<'info> {
     pub system_program: Program<'info, System>,
 }
 
-// Estructura para el unstake de tokens
 #[derive(Accounts)]
 pub struct Unstake<'info> {
     #[account(mut)]
@@ -260,7 +234,7 @@ pub struct Unstake<'info> {
     pub user: Signer<'info>,
 }
 
-// Estructura para almacenar los datos del token
+// --- Data structures ---
 #[account]
 pub struct MemeData {
     pub name: String,
@@ -270,14 +244,12 @@ pub struct MemeData {
     pub authority: Pubkey,
 }
 
-// Estructura para representar una cuenta de token
 #[account]
 pub struct TokenAccount {
     pub owner: Pubkey,
     pub balance: u64,
 }
 
-// Estructura para almacenar información de staking
 #[account]
 pub struct StakeAccount {
     pub owner: Pubkey,
@@ -285,7 +257,7 @@ pub struct StakeAccount {
     pub start_time: i64,
 }
 
-// Enumeración de códigos de error
+// --- Errors ---
 #[error_code]
 pub enum ErrorCode {
     #[msg("No autorizado para realizar esta acción")]
@@ -296,7 +268,7 @@ pub enum ErrorCode {
     InsufficientFunds,
 }
 
-// Evento que se emite cuando se realiza una transferencia
+// --- Eventos ---
 #[event]
 pub struct TransferEvent {
     #[index]
@@ -306,7 +278,6 @@ pub struct TransferEvent {
     pub amount: u64,
 }
 
-// Nuevo evento que se emite cuando se queman tokens
 #[event]
 pub struct BurnEvent {
     #[index]
@@ -314,7 +285,6 @@ pub struct BurnEvent {
     pub amount: u64,
 }
 
-// Nuevo evento que se emite cuando se cambia la autoridad
 #[event]
 pub struct ChangeAuthorityEvent {
     #[index]
@@ -322,7 +292,6 @@ pub struct ChangeAuthorityEvent {
     pub new_authority: Pubkey,
 }
 
-// Evento que se emite cuando se hace stake de tokens
 #[event]
 pub struct StakeEvent {
     #[index]
@@ -330,7 +299,6 @@ pub struct StakeEvent {
     pub amount: u64,
 }
 
-// Evento que se emite cuando se hace unstake de tokens
 #[event]
 pub struct UnstakeEvent {
     #[index]
